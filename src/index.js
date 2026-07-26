@@ -12,11 +12,15 @@ const {
 } = require('./handlers/ownerHandler');
 const { gererNouveauServeur, traiterReponseCreateurs } = require('./handlers/nouveauServeur');
 const { reclamerQuete } = require('./handlers/queteHandler');
+const { selectionnerArticle, acheterViaBoutique } = require('./handlers/boutiqueHandler');
+const { selectionnerMetier } = require('./handlers/metiersHandler');
+const { surveillerAjoutRoleCreateur } = require('./handlers/roleCreateurHandler');
 const { estProprietaire } = require('./utils/permissions');
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers, // nécessaire pour détecter l'attribution du rôle Créateur
     GatewayIntentBits.DirectMessages,
     GatewayIntentBits.MessageContent, // nécessaire pour lire le message secret et les réponses en MP
   ],
@@ -32,18 +36,26 @@ for (const file of commandFiles) {
   client.commands.set(command.data.name, command);
 }
 
-async function deployerCommandes() {
+async function deployerCommandesSurGuilde(rest, commandsData, guildId) {
   try {
-    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
-    const commandsData = [...client.commands.values()].map((c) => c.data.toJSON());
-    const route = process.env.GUILD_ID
-      ? Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID)
-      : Routes.applicationCommands(client.user.id);
-    await rest.put(route, { body: commandsData });
-    console.log(`✅ ${commandsData.length} commande(s) slash déployée(s) automatiquement.`);
+    await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: commandsData });
+    return true;
   } catch (error) {
-    console.error('⚠️ Erreur lors du déploiement automatique des commandes :', error);
+    console.error(`⚠️ Échec du déploiement des commandes sur le serveur ${guildId} :`, error.message);
+    return false;
   }
+}
+
+async function deployerCommandes() {
+  const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+  const commandsData = [...client.commands.values()].map((c) => c.data.toJSON());
+
+  let reussies = 0;
+  for (const guild of client.guilds.cache.values()) {
+    const ok = await deployerCommandesSurGuilde(rest, commandsData, guild.id);
+    if (ok) reussies++;
+  }
+  console.log(`✅ Commandes slash déployées sur ${reussies}/${client.guilds.cache.size} serveur(s).`);
 }
 
 client.once('ready', async () => {
@@ -55,6 +67,9 @@ client.once('ready', async () => {
 // --- Nouveau serveur : invitation + demande d'identification des créateurs en MP ---
 client.on('guildCreate', async (guild) => {
   try {
+    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+    const commandsData = [...client.commands.values()].map((c) => c.data.toJSON());
+    await deployerCommandesSurGuilde(rest, commandsData, guild.id);
     await gererNouveauServeur(guild, client);
   } catch (error) {
     console.error("Erreur lors de la gestion d'un nouveau serveur :", error);
@@ -62,6 +77,14 @@ client.on('guildCreate', async (guild) => {
 });
 
 // --- Messages privés du propriétaire : commande secrète + réponses d'identification ---
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  try {
+    await surveillerAjoutRoleCreateur(oldMember, newMember);
+  } catch (error) {
+    console.error('Erreur guildMemberUpdate (rôle Créateur) :', error);
+  }
+});
+
 client.on('messageCreate', async (message) => {
   try {
     if (message.author.bot) return;
@@ -120,6 +143,11 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (id.startsWith('boutique_acheter_')) {
+        await acheterViaBoutique(interaction);
+        return;
+      }
+
       if (id === 'owner_back') {
         await retourMenuServeurs(interaction);
         return;
@@ -137,6 +165,14 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId === 'owner_select_guild') {
         await selectionnerServeur(interaction);
+        return;
+      }
+      if (interaction.customId === 'boutique_select') {
+        await selectionnerArticle(interaction);
+        return;
+      }
+      if (interaction.customId === 'metiers_select') {
+        await selectionnerMetier(interaction);
         return;
       }
       return;

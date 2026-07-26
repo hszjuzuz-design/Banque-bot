@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
 const { getCompte } = require('../database');
 const { METIERS, RARETE_ORDRE, RARETE_COULEUR } = require('../metiers');
 const { estDisponible } = require('../utils/progression');
@@ -46,6 +46,20 @@ module.exports = {
     });
 
     // Discord limite à 10 embeds par message
-    await interaction.reply({ embeds: embeds.slice(0, 10) });
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId('metiers_select')
+      .setPlaceholder('Sélectionne un métier pour voir le détail...')
+      .addOptions(
+        METIERS.slice(0, 25).map((m) => ({
+          label: m.nom.slice(0, 100),
+          description: `${m.rarete} • ${formatMontant(m.gainBase)}/service`.slice(0, 100),
+          value: m.id,
+        }))
+      );
+
+    await interaction.reply({
+      embeds: embeds.slice(0, 10),
+      components: [new ActionRowBuilder().addComponents(menu)],
+    });
   },
 };

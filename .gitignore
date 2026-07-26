@@ -1,0 +1,7 @@
+node_modules/
+.env
+banque.sqlite
+banque.sqlite-shm
+banque.sqlite-wal
+*.log
+.DS_Store

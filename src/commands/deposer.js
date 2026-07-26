@@ -1,5 +1,6 @@
-const { SlashCommandBuilder } = require('discord.js');
-const { getCompte, updateCash, updateBanque, logTransaction } = require('../database');
+const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { getCompte, updateCash, updateBanque, logTransaction, incrementerQuete } = require('../database');
+const { verifierSucces } = require('../utils/progression');
 const { formatMontant } = require('../utils/format');
 
 module.exports = {
@@ -34,7 +35,21 @@ module.exports = {
     updateCash(userId, guildId, -montant);
     updateBanque(userId, guildId, montant);
     logTransaction(userId, userId, montant, 'depot', guildId);
+    incrementerQuete(userId, guildId, 'deposer_argent', 1);
 
     await interaction.reply(`🏦 Tu as déposé **${formatMontant(montant)}** à la banque.`);
+
+    const nouveauxSucces = verifierSucces(userId, guildId);
+    if (nouveauxSucces.length > 0) {
+      const embed = new EmbedBuilder()
+        .setColor(0x2ecc71)
+        .setTitle('🏆 Succès débloqué(s) !')
+        .setDescription(
+          nouveauxSucces
+            .map((s) => `${s.emoji} **${s.nom}** — ${s.description} (+${formatMontant(s.recompense)})`)
+            .join('\n')
+        );
+      await interaction.followUp({ embeds: [embed] });
+    }
   },
 };

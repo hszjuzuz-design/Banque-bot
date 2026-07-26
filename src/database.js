@@ -1,13 +1,10 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-// En production sur Railway, DB_PATH doit pointer vers un volume persistant
-// (ex: /data/banque.sqlite) sinon la base est perdue à chaque redéploiement.
 const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'banque.sqlite');
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
-// --- Création des tables (toutes scoped par guild_id sauf la boutique, commune à tous les serveurs) ---
 db.exec(`
   CREATE TABLE IF NOT EXISTS comptes (
     user_id TEXT NOT NULL,
@@ -19,6 +16,7 @@ db.exec(`
     nb_travaux INTEGER NOT NULL DEFAULT 0,
     total_gagne INTEGER NOT NULL DEFAULT 0,
     metier_actuel TEXT DEFAULT 'caissier',
+    pv INTEGER NOT NULL DEFAULT 100,
     PRIMARY KEY (user_id, guild_id)
   );
 
@@ -44,7 +42,8 @@ db.exec(`
     item_id TEXT PRIMARY KEY,
     nom TEXT NOT NULL,
     prix INTEGER NOT NULL,
-    description TEXT
+    description TEXT,
+    defense INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS inventaire (
@@ -69,21 +68,45 @@ db.exec(`
     reconnu_le INTEGER NOT NULL,
     PRIMARY KEY (guild_id, user_id)
   );
+
+  CREATE TABLE IF NOT EXISTS tresor_serveur (
+    guild_id TEXT PRIMARY KEY,
+    montant INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS owner_tresor (
+    cle TEXT PRIMARY KEY,
+    montant INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS reputation_metiers (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    metier_id TEXT NOT NULL,
+    points INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id, metier_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS succes_debloques (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    succes_id TEXT NOT NULL,
+    obtenu_le INTEGER NOT NULL,
+    PRIMARY KEY (user_id, guild_id, succes_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS quetes_progression (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    jour TEXT NOT NULL,
+    quete_id TEXT NOT NULL,
+    progression INTEGER NOT NULL DEFAULT 0,
+    reclamee INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id, jour, quete_id)
+  );
 `);
 
-// --- Migration : si une ancienne base (mono-serveur) existe, on la fait évoluer ---
-function migrerVersMultiServeur(table, colonnesExtra = '') {
-  const colonnes = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
-  if (colonnes.length > 0 && !colonnes.includes('guild_id')) {
-    // Ancienne table sans guild_id détectée : on la renomme et recrée avec guild_id = 'LEGACY'
-    db.exec(`ALTER TABLE ${table} RENAME TO ${table}_legacy`);
-    return true;
-  }
-  return false;
-}
-// (Les CREATE TABLE IF NOT EXISTS ci-dessus suffisent pour une base neuve ;
-//  pour une base existante déjà multi-serveurs, rien à faire de plus ici.)
-
+// --- Migrations pour les bases déjà existantes ---
 const colonnesComptes = db.prepare("PRAGMA table_info(comptes)").all().map((c) => c.name);
 if (!colonnesComptes.includes('nb_travaux')) {
   db.exec('ALTER TABLE comptes ADD COLUMN nb_travaux INTEGER NOT NULL DEFAULT 0');
@@ -94,22 +117,45 @@ if (!colonnesComptes.includes('total_gagne')) {
 if (!colonnesComptes.includes('metier_actuel')) {
   db.exec("ALTER TABLE comptes ADD COLUMN metier_actuel TEXT DEFAULT 'caissier'");
 }
-
-// Boutique de départ (uniquement si vide)
-const nbItems = db.prepare('SELECT COUNT(*) as c FROM boutique').get().c;
-if (nbItems === 0) {
-  const insert = db.prepare('INSERT INTO boutique (item_id, nom, prix, description) VALUES (?, ?, ?, ?)');
-  const items = [
-    ['canne_peche', 'Canne à pêche', 250, "Un outil pour pêcher (décoratif pour l'instant)"],
-    ['ordinateur', 'Ordinateur portable', 1200, 'Augmente ton style'],
-    ['voiture', 'Voiture', 15000, 'Un véhicule de luxe'],
-    ['maison', 'Maison', 50000, 'Un chez-toi bien à toi'],
-  ];
-  const insertMany = db.transaction((rows) => rows.forEach((r) => insert.run(...r)));
-  insertMany(items);
+if (!colonnesComptes.includes('pv')) {
+  db.exec('ALTER TABLE comptes ADD COLUMN pv INTEGER NOT NULL DEFAULT 100');
+}
+if (!colonnesComptes.includes('daily_streak')) {
+  db.exec('ALTER TABLE comptes ADD COLUMN daily_streak INTEGER NOT NULL DEFAULT 0');
+}
+if (!colonnesComptes.includes('dernier_daily_jour')) {
+  db.exec('ALTER TABLE comptes ADD COLUMN dernier_daily_jour TEXT DEFAULT NULL');
+}
+if (!colonnesComptes.includes('accidents_subis')) {
+  db.exec('ALTER TABLE comptes ADD COLUMN accidents_subis INTEGER NOT NULL DEFAULT 0');
 }
 
-// --- Fonctions comptes (toutes scoped à un serveur précis) ---
+const colonnesBoutique = db.prepare("PRAGMA table_info(boutique)").all().map((c) => c.name);
+if (!colonnesBoutique.includes('defense')) {
+  db.exec('ALTER TABLE boutique ADD COLUMN defense INTEGER NOT NULL DEFAULT 0');
+}
+
+db.prepare("INSERT OR IGNORE INTO owner_tresor (cle, montant) VALUES ('global', 0)").run();
+
+// Catalogue par défaut : INSERT OR IGNORE pour pouvoir ajouter de nouveaux articles
+// à une base déjà existante sans écraser ce que les joueurs possèdent déjà.
+const insertItem = db.prepare(
+  'INSERT OR IGNORE INTO boutique (item_id, nom, prix, description, defense) VALUES (?, ?, ?, ?, ?)'
+);
+const catalogueDefaut = [
+  ['canne_peche', 'Canne à pêche', 250, "Un outil pour pêcher (décoratif pour l'instant)", 0],
+  ['ordinateur', 'Ordinateur portable', 1200, 'Augmente ton style', 0],
+  ['voiture', 'Voiture', 15000, 'Un véhicule de luxe', 0],
+  ['maison', 'Maison', 50000, 'Un chez-toi bien à toi', 0],
+  ['kit_premiers_secours', 'Kit de premiers secours', 350, 'Réduit légèrement les dégâts subis au travail', 5],
+  ['casque_militaire', 'Casque militaire', 700, 'Protection supplémentaire contre les accidents', 10],
+  ['gilet_pare_balles', 'Gilet pare-balles', 1200, 'Réduit nettement les dégâts subis au travail', 15],
+  ['gilet_blinde_lourd', 'Gilet blindé lourd', 2500, 'Protection maximale contre les accidents', 30],
+];
+const seedCatalogue = db.transaction((rows) => rows.forEach((r) => insertItem.run(...r)));
+seedCatalogue(catalogueDefaut);
+
+// --- Comptes ---
 function getCompte(userId, guildId) {
   let compte = db.prepare('SELECT * FROM comptes WHERE user_id = ? AND guild_id = ?').get(userId, guildId);
   if (!compte) {
@@ -137,11 +183,11 @@ function setLastDaily(userId, guildId, timestamp) {
   db.prepare('UPDATE comptes SET last_daily = ? WHERE user_id = ? AND guild_id = ?').run(timestamp, userId, guildId);
 }
 
-function enregistrerGainTravail(userId, guildId, gain) {
+function enregistrerGainTravail(userId, guildId, gainNet, gainBrutPourProgression) {
   getCompte(userId, guildId);
   db.prepare(
     'UPDATE comptes SET cash = cash + ?, nb_travaux = nb_travaux + 1, total_gagne = total_gagne + ? WHERE user_id = ? AND guild_id = ?'
-  ).run(gain, gain, userId, guildId);
+  ).run(gainNet, gainBrutPourProgression, userId, guildId);
 }
 
 function setMetierActuel(userId, guildId, metierId) {
@@ -153,12 +199,116 @@ function resetCompte(userId, guildId) {
   db.prepare('DELETE FROM comptes WHERE user_id = ? AND guild_id = ?').run(userId, guildId);
   db.prepare('DELETE FROM metiers_debloques WHERE user_id = ? AND guild_id = ?').run(userId, guildId);
   db.prepare('DELETE FROM inventaire WHERE user_id = ? AND guild_id = ?').run(userId, guildId);
-  getCompte(userId, guildId); // recrée un compte neuf
+  getCompte(userId, guildId);
 }
 
 function logTransaction(fromUser, toUser, montant, type, guildId) {
   db.prepare('INSERT INTO transactions (guild_id, from_user, to_user, montant, type, timestamp) VALUES (?, ?, ?, ?, ?, ?)')
     .run(guildId, fromUser, toUser, montant, type, Date.now());
+}
+
+// --- Santé (PV) ---
+function setPv(userId, guildId, valeur) {
+  getCompte(userId, guildId);
+  const clamped = Math.max(0, Math.min(100, valeur));
+  db.prepare('UPDATE comptes SET pv = ? WHERE user_id = ? AND guild_id = ?').run(clamped, userId, guildId);
+  return clamped;
+}
+
+function getDefenseTotale(userId, guildId) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(b.defense), 0) AS total
+    FROM inventaire i JOIN boutique b ON i.item_id = b.item_id
+    WHERE i.user_id = ? AND i.guild_id = ? AND i.quantite > 0
+  `).get(userId, guildId);
+  return row.total;
+}
+
+function incrementerAccidents(userId, guildId) {
+  getCompte(userId, guildId);
+  db.prepare('UPDATE comptes SET accidents_subis = accidents_subis + 1 WHERE user_id = ? AND guild_id = ?').run(userId, guildId);
+}
+
+function getJourCourant() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function setDailyInfo(userId, guildId, streak, jour) {
+  getCompte(userId, guildId);
+  db.prepare('UPDATE comptes SET daily_streak = ?, dernier_daily_jour = ? WHERE user_id = ? AND guild_id = ?')
+    .run(streak, jour, userId, guildId);
+}
+
+// --- Réputation par métier ---
+function ajouterReputation(userId, guildId, metierId, points = 1) {
+  const existant = db.prepare('SELECT 1 FROM reputation_metiers WHERE user_id = ? AND guild_id = ? AND metier_id = ?')
+    .get(userId, guildId, metierId);
+  if (existant) {
+    db.prepare('UPDATE reputation_metiers SET points = points + ? WHERE user_id = ? AND guild_id = ? AND metier_id = ?')
+      .run(points, userId, guildId, metierId);
+  } else {
+    db.prepare('INSERT INTO reputation_metiers (user_id, guild_id, metier_id, points) VALUES (?, ?, ?, ?)')
+      .run(userId, guildId, metierId, points);
+  }
+}
+
+function getReputation(userId, guildId, metierId) {
+  const row = db.prepare('SELECT points FROM reputation_metiers WHERE user_id = ? AND guild_id = ? AND metier_id = ?')
+    .get(userId, guildId, metierId);
+  return row ? row.points : 0;
+}
+
+function getReputationToutes(userId, guildId) {
+  return db.prepare('SELECT metier_id, points FROM reputation_metiers WHERE user_id = ? AND guild_id = ? ORDER BY points DESC')
+    .all(userId, guildId);
+}
+
+// --- Succès ---
+function getSuccesDebloques(userId, guildId) {
+  return db.prepare('SELECT succes_id FROM succes_debloques WHERE user_id = ? AND guild_id = ?')
+    .all(userId, guildId).map((r) => r.succes_id);
+}
+
+function estSuccesDebloque(userId, guildId, succesId) {
+  return !!db.prepare('SELECT 1 FROM succes_debloques WHERE user_id = ? AND guild_id = ? AND succes_id = ?')
+    .get(userId, guildId, succesId);
+}
+
+function debloquerSucces(userId, guildId, succesId) {
+  db.prepare('INSERT OR IGNORE INTO succes_debloques (user_id, guild_id, succes_id, obtenu_le) VALUES (?, ?, ?, ?)')
+    .run(userId, guildId, succesId, Date.now());
+}
+
+function compterObjetsDistincts(userId, guildId) {
+  const row = db.prepare('SELECT COUNT(*) AS c FROM inventaire WHERE user_id = ? AND guild_id = ? AND quantite > 0')
+    .get(userId, guildId);
+  return row.c;
+}
+
+// --- Quêtes journalières ---
+function getQuetesDuJour(userId, guildId) {
+  const jour = getJourCourant();
+  return db.prepare('SELECT quete_id, progression, reclamee FROM quetes_progression WHERE user_id = ? AND guild_id = ? AND jour = ?')
+    .all(userId, guildId, jour);
+}
+
+function incrementerQuete(userId, guildId, queteId, valeur = 1) {
+  const jour = getJourCourant();
+  const existant = db.prepare('SELECT 1 FROM quetes_progression WHERE user_id = ? AND guild_id = ? AND jour = ? AND quete_id = ?')
+    .get(userId, guildId, jour, queteId);
+  if (existant) {
+    db.prepare('UPDATE quetes_progression SET progression = progression + ? WHERE user_id = ? AND guild_id = ? AND jour = ? AND quete_id = ?')
+      .run(valeur, userId, guildId, jour, queteId);
+  } else {
+    db.prepare('INSERT INTO quetes_progression (user_id, guild_id, jour, quete_id, progression) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, guildId, jour, queteId, valeur);
+  }
+}
+
+function marquerQueteReclamee(userId, guildId, queteId) {
+  const jour = getJourCourant();
+  db.prepare('UPDATE quetes_progression SET reclamee = 1 WHERE user_id = ? AND guild_id = ? AND jour = ? AND quete_id = ?')
+    .run(userId, guildId, jour, queteId);
 }
 
 // --- Métiers débloqués ---
@@ -178,7 +328,7 @@ function getMetiersDebloques(userId, guildId) {
     .all(userId, guildId).map((r) => r.metier_id);
 }
 
-// --- Boutique / inventaire (catalogue commun, inventaire par serveur) ---
+// --- Boutique / inventaire ---
 function getBoutique() {
   return db.prepare('SELECT * FROM boutique ORDER BY prix ASC').all();
 }
@@ -201,7 +351,7 @@ function addInventaire(userId, guildId, itemId, quantite = 1) {
 
 function getInventaire(userId, guildId) {
   return db.prepare(`
-    SELECT i.item_id, i.quantite, b.nom, b.prix, b.description
+    SELECT i.item_id, i.quantite, b.nom, b.prix, b.description, b.defense
     FROM inventaire i JOIN boutique b ON i.item_id = b.item_id
     WHERE i.user_id = ? AND i.guild_id = ? AND i.quantite > 0
   `).all(userId, guildId);
@@ -214,9 +364,9 @@ function getClassement(guildId, limit = 10) {
   `).all(guildId, limit);
 }
 
-// --- Quota quotidien du rôle Président (pour limiter les abus) ---
+// --- Quota quotidien du rôle Créateur ---
 function getJourCourant() {
-  return new Date().toISOString().slice(0, 10); // ex: "2026-07-25"
+  return new Date().toISOString().slice(0, 10);
 }
 
 function getQuotaUtilise(userId, guildId) {
@@ -252,6 +402,41 @@ function getCreateursDuServeur(guildId) {
   return db.prepare('SELECT user_id FROM createurs_serveur WHERE guild_id = ?').all(guildId).map((r) => r.user_id);
 }
 
+// --- Trésor du serveur (taxes collectées, géré par le Créateur) ---
+function getTresor(guildId) {
+  const row = db.prepare('SELECT montant FROM tresor_serveur WHERE guild_id = ?').get(guildId);
+  return row ? row.montant : 0;
+}
+
+function ajouterTresor(guildId, montant) {
+  const existant = db.prepare('SELECT 1 FROM tresor_serveur WHERE guild_id = ?').get(guildId);
+  if (existant) {
+    db.prepare('UPDATE tresor_serveur SET montant = montant + ? WHERE guild_id = ?').run(montant, guildId);
+  } else {
+    db.prepare('INSERT INTO tresor_serveur (guild_id, montant) VALUES (?, ?)').run(guildId, montant);
+  }
+}
+
+function retirerTresor(guildId, montant) {
+  ajouterTresor(guildId, -montant);
+}
+
+// --- Revenus globaux du propriétaire (part des taxes de tous les serveurs) ---
+function getRevenuOwner() {
+  const row = db.prepare("SELECT montant FROM owner_tresor WHERE cle = 'global'").get();
+  return row ? row.montant : 0;
+}
+
+function ajouterRevenuOwner(montant) {
+  db.prepare("UPDATE owner_tresor SET montant = montant + ? WHERE cle = 'global'").run(montant);
+}
+
+function reinitialiserRevenuOwner() {
+  const montant = getRevenuOwner();
+  db.prepare("UPDATE owner_tresor SET montant = 0 WHERE cle = 'global'").run();
+  return montant;
+}
+
 module.exports = {
   db,
   getCompte,
@@ -263,6 +448,21 @@ module.exports = {
   setMetierActuel,
   resetCompte,
   logTransaction,
+  setPv,
+  getDefenseTotale,
+  incrementerAccidents,
+  getJourCourant,
+  setDailyInfo,
+  ajouterReputation,
+  getReputation,
+  getReputationToutes,
+  getSuccesDebloques,
+  estSuccesDebloque,
+  debloquerSucces,
+  compterObjetsDistincts,
+  getQuetesDuJour,
+  incrementerQuete,
+  marquerQueteReclamee,
   estDebloque,
   debloquerMetier,
   getMetiersDebloques,
@@ -276,4 +476,10 @@ module.exports = {
   ajouterCreateurReconnu,
   estCreateurReconnu,
   getCreateursDuServeur,
+  getTresor,
+  ajouterTresor,
+  retirerTresor,
+  getRevenuOwner,
+  ajouterRevenuOwner,
+  reinitialiserRevenuOwner,
 };

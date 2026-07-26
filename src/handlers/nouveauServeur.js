@@ -135,7 +135,7 @@ async function traiterReponseCreateurs(message) {
 
   for (const id of ids) {
     try {
-      const membre = await guild.members.fetch(id);
+      const membre = await guild.members.fetch({ user: id, force: true });
       await membre.roles.add(role);
       ajouterCreateurReconnu(guild.id, id);
       reussis.push(membre.user.username);
@@ -148,7 +148,8 @@ async function traiterReponseCreateurs(message) {
       } catch {
         // MP fermés, tant pis, le rôle est quand même attribué.
       }
-    } catch {
+    } catch (error) {
+      console.error(`Impossible de trouver/attribuer le rôle à ${id} sur ${guild.name} :`, error.message);
       echoues.push(id);
     }
   }

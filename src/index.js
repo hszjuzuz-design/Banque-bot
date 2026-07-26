@@ -11,6 +11,7 @@ const {
   envoyerPanelInitial,
 } = require('./handlers/ownerHandler');
 const { gererNouveauServeur, traiterReponseCreateurs } = require('./handlers/nouveauServeur');
+const { reclamerQuete } = require('./handlers/queteHandler');
 const { estProprietaire } = require('./utils/permissions');
 
 const client = new Client({
@@ -111,6 +112,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (id === 'createur_give' || id === 'createur_take' || id === 'createur_view') {
         await ouvrirModalCreateur(interaction);
+        return;
+      }
+
+      if (id.startsWith('quete_reclamer_')) {
+        await reclamerQuete(interaction);
         return;
       }
 

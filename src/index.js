@@ -1,7 +1,7 @@
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
-const { Client, GatewayIntentBits, Collection, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Collection, Partials, REST, Routes } = require('discord.js');
 const { ouvrirModal: ouvrirModalCreateur, traiterModal: traiterModalCreateur } = require('./handlers/createurHandler');
 const {
   selectionnerServeur,
@@ -31,9 +31,24 @@ for (const file of commandFiles) {
   client.commands.set(command.data.name, command);
 }
 
-client.once('ready', () => {
+async function deployerCommandes() {
+  try {
+    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
+    const commandsData = [...client.commands.values()].map((c) => c.data.toJSON());
+    const route = process.env.GUILD_ID
+      ? Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID)
+      : Routes.applicationCommands(client.user.id);
+    await rest.put(route, { body: commandsData });
+    console.log(`✅ ${commandsData.length} commande(s) slash déployée(s) automatiquement.`);
+  } catch (error) {
+    console.error('⚠️ Erreur lors du déploiement automatique des commandes :', error);
+  }
+}
+
+client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
   console.log(`🏦 Banque prête sur ${client.guilds.cache.size} serveur(s).`);
+  await deployerCommandes();
 });
 
 // --- Nouveau serveur : invitation + demande d'identification des créateurs en MP ---
@@ -143,4 +158,3 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
-

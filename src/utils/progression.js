@@ -1,5 +1,17 @@
-const { getCompte, estDebloque, debloquerMetier, updateCash, getClassement } = require('../database');
+const {
+  getCompte,
+  estDebloque,
+  debloquerMetier,
+  updateCash,
+  getClassement,
+  getMetiersDebloques,
+  getSuccesDebloques,
+  estSuccesDebloque,
+  debloquerSucces,
+  compterObjetsDistincts,
+} = require('../database');
 const { METIERS } = require('../metiers');
+const { SUCCES } = require('../succes');
 
 /**
  * Vérifie tous les métiers non débloqués d'un utilisateur (sur un serveur donné) et débloque
@@ -42,4 +54,28 @@ function estDisponible(userId, guildId, metier) {
   return estDebloque(userId, guildId, metier.id);
 }
 
-module.exports = { verifierDeblocages, estDisponible };
+/**
+ * Vérifie tous les succès non débloqués d'un utilisateur et débloque ceux
+ * dont la condition est remplie, en versant la récompense associée.
+ */
+function verifierSucces(userId, guildId) {
+  const compte = getCompte(userId, guildId);
+  const metiersDebloques = getMetiersDebloques(userId, guildId);
+  const nbObjetsDistincts = compterObjetsDistincts(userId, guildId);
+  const ctx = { compte, metiersDebloques, nbObjetsDistincts };
+
+  const nouveaux = [];
+  for (const succes of SUCCES) {
+    if (estSuccesDebloque(userId, guildId, succes.id)) continue;
+    if (succes.condition(ctx)) {
+      debloquerSucces(userId, guildId, succes.id);
+      if (succes.recompense) {
+        updateCash(userId, guildId, succes.recompense);
+      }
+      nouveaux.push(succes);
+    }
+  }
+  return nouveaux;
+}
+
+module.exports = { verifierDeblocages, estDisponible, verifierSucces };

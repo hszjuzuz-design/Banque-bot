@@ -72,7 +72,7 @@ module.exports = {
         .setTitle('🎉 Nouveau(x) métier(s) débloqué(s) !')
         .setDescription(
           nouveauxMetiers
-            .map((m) => `${m.emoji} **${m.nom}** (${m.rarete}) — utilise \`/choisir-metier\` pour l'exercer`)
+            .map((m) => `${m.emoji} **${m.nom}** (${m.rarete}) — utilise \`/metiers\` pour le choisir`)
             .join('\n')
         );
       await interaction.followUp({ embeds: [embed] });

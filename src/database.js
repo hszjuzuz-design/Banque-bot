@@ -104,6 +104,13 @@ db.exec(`
     reclamee INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, guild_id, jour, quete_id)
   );
+
+  CREATE TABLE IF NOT EXISTS capacite_cooldown (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    derniere_utilisation INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id)
+  );
 `);
 
 // --- Migrations pour les bases déjà existantes ---
@@ -151,6 +158,7 @@ const catalogueDefaut = [
   ['casque_militaire', 'Casque militaire', 700, 'Protection supplémentaire contre les accidents', 10],
   ['gilet_pare_balles', 'Gilet pare-balles', 1200, 'Réduit nettement les dégâts subis au travail', 15],
   ['gilet_blinde_lourd', 'Gilet blindé lourd', 2500, 'Protection maximale contre les accidents', 30],
+  ['montre_collection', 'Montre de collection', 5000, "Pièce d'horlogerie rare, obtenue via la capacité de l'Horloger", 0],
 ];
 const seedCatalogue = db.transaction((rows) => rows.forEach((r) => insertItem.run(...r)));
 seedCatalogue(catalogueDefaut);
@@ -437,6 +445,37 @@ function reinitialiserRevenuOwner() {
   return montant;
 }
 
+// --- Capacités de métier ---
+function getDerniereCapacite(userId, guildId) {
+  const row = db.prepare('SELECT derniere_utilisation FROM capacite_cooldown WHERE user_id = ? AND guild_id = ?')
+    .get(userId, guildId);
+  return row ? row.derniere_utilisation : 0;
+}
+
+function setDerniereCapacite(userId, guildId, timestamp) {
+  const existant = db.prepare('SELECT 1 FROM capacite_cooldown WHERE user_id = ? AND guild_id = ?').get(userId, guildId);
+  if (existant) {
+    db.prepare('UPDATE capacite_cooldown SET derniere_utilisation = ? WHERE user_id = ? AND guild_id = ?')
+      .run(timestamp, userId, guildId);
+  } else {
+    db.prepare('INSERT INTO capacite_cooldown (user_id, guild_id, derniere_utilisation) VALUES (?, ?, ?)')
+      .run(userId, guildId, timestamp);
+  }
+}
+
+function crediterTousLesJoueurs(guildId, montant) {
+  const info = db.prepare('UPDATE comptes SET cash = cash + ? WHERE guild_id = ?').run(montant, guildId);
+  return info.changes;
+}
+
+function ajouterReputationSelonMetierActuel(guildId, points) {
+  const joueurs = db.prepare('SELECT user_id, metier_actuel FROM comptes WHERE guild_id = ?').all(guildId);
+  for (const j of joueurs) {
+    ajouterReputation(j.user_id, guildId, j.metier_actuel || 'caissier', points);
+  }
+  return joueurs.length;
+}
+
 module.exports = {
   db,
   getCompte,
@@ -482,4 +521,8 @@ module.exports = {
   getRevenuOwner,
   ajouterRevenuOwner,
   reinitialiserRevenuOwner,
+  getDerniereCapacite,
+  setDerniereCapacite,
+  crediterTousLesJoueurs,
+  ajouterReputationSelonMetierActuel,
 };

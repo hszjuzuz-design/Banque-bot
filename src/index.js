@@ -13,7 +13,7 @@ const {
 const { gererNouveauServeur, traiterReponseCreateurs } = require('./handlers/nouveauServeur');
 const { reclamerQuete } = require('./handlers/queteHandler');
 const { selectionnerArticle, acheterViaBoutique } = require('./handlers/boutiqueHandler');
-const { selectionnerMetier } = require('./handlers/metiersHandler');
+const { naviguerMetier, choisirMetierBouton } = require('./handlers/metiersHandler');
 const { surveillerAjoutRoleCreateur } = require('./handlers/roleCreateurHandler');
 const { estProprietaire } = require('./utils/permissions');
 
@@ -148,6 +148,16 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (id.startsWith('metiers_nav_')) {
+        await naviguerMetier(interaction);
+        return;
+      }
+
+      if (id.startsWith('metiers_choisir_')) {
+        await choisirMetierBouton(interaction);
+        return;
+      }
+
       if (id === 'owner_back') {
         await retourMenuServeurs(interaction);
         return;
@@ -169,10 +179,6 @@ client.on('interactionCreate', async (interaction) => {
       }
       if (interaction.customId === 'boutique_select') {
         await selectionnerArticle(interaction);
-        return;
-      }
-      if (interaction.customId === 'metiers_select') {
-        await selectionnerMetier(interaction);
         return;
       }
       return;

@@ -1,93 +1,110 @@
-const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const {
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  StringSelectMenuBuilder,
+} = require('discord.js');
 const { getCompte, setMetierActuel } = require('../database');
-const { METIERS, RARETE_COULEUR } = require('../metiers');
+const { METIERS, RARETE_ORDRE, RARETE_COULEUR } = require('../metiers');
 const { estDisponible } = require('../utils/progression');
 const { getCapacite } = require('../capacites');
 const { formatMontant } = require('../utils/format');
 
 /**
- * Construit la vue (embed + boutons) pour un métier donné, à l'index fourni
- * dans le tableau METIERS. Utilisée à la fois par la commande /metiers et
- * par les boutons de navigation/sélection.
+ * Construit la vue (embed + composants) pour une page de rareté donnée.
+ * Une page = une rareté = tous les métiers de cette rareté.
  */
-function construireVueMetier(userId, guildId, index) {
-  const idx = Math.max(0, Math.min(METIERS.length - 1, index));
-  const metier = METIERS[idx];
+function construireVueRarete(userId, guildId, rareteIndex) {
+  const idx = Math.max(0, Math.min(RARETE_ORDRE.length - 1, rareteIndex));
+  const rarete = RARETE_ORDRE[idx];
   const compte = getCompte(userId, guildId);
-  const disponible = estDisponible(userId, guildId, metier);
-  const estActif = compte.metier_actuel === metier.id;
-  const capacite = getCapacite(metier.id);
+  const metiersDeCetteRarete = METIERS.filter((m) => m.rarete === rarete);
 
   const embed = new EmbedBuilder()
-    .setColor(RARETE_COULEUR[metier.rarete])
-    .setTitle(`${metier.emoji} ${metier.nom}  (${idx + 1}/${METIERS.length})`)
-    .addFields(
-      { name: 'Rareté', value: metier.rarete, inline: true },
-      { name: 'Gain par service', value: formatMontant(metier.gainBase), inline: true },
-      {
-        name: 'Statut',
-        value: estActif
-          ? "⭐ C'est ton métier actuel"
-          : disponible
-          ? '🔓 Débloqué'
-          : `🔒 Verrouillé\n${metier.conditionTexte}`,
-      }
-    );
+    .setColor(RARETE_COULEUR[rarete])
+    .setTitle(`${rarete}  (${idx + 1}/${RARETE_ORDRE.length})`)
+    .setDescription('Choisis un métier dans le menu ci-dessous pour l\'exercer.');
 
-  if (capacite) {
-    embed.addFields({
-      name: `${capacite.emoji} Capacité spéciale : ${capacite.nom}`,
-      value: `${capacite.description}\nRecharge : ${capacite.cooldownHeures}h`,
-    });
+  for (const metier of metiersDeCetteRarete) {
+    const disponible = estDisponible(userId, guildId, metier);
+    const estActif = compte.metier_actuel === metier.id;
+    const capacite = getCapacite(metier.id);
+    const cadenas = estActif ? '⭐' : disponible ? '🔓' : '🔒';
+
+    let valeur = `${formatMontant(metier.gainBase)}/service`;
+    if (!disponible && metier.conditionTexte) {
+      valeur += `\n↳ *Condition : ${metier.conditionTexte}*`;
+    }
+    if (capacite) {
+      valeur += `\n${capacite.emoji} Capacité : *${capacite.nom}* (recharge ${capacite.cooldownHeures}h)`;
+    }
+
+    embed.addFields({ name: `${cadenas} ${metier.emoji} ${metier.nom}`, value: valeur });
   }
 
   const navigation = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(`metiers_nav_${idx - 1}`)
-      .setLabel('Précédent')
+      .setCustomId(`metiers_rarete_${idx - 1}`)
+      .setLabel('Rareté précédente')
       .setEmoji('⬅️')
       .setStyle(ButtonStyle.Secondary)
       .setDisabled(idx === 0),
     new ButtonBuilder()
-      .setCustomId(`metiers_nav_${idx + 1}`)
-      .setLabel('Suivant')
+      .setCustomId(`metiers_rarete_${idx + 1}`)
+      .setLabel('Rareté suivante')
       .setEmoji('➡️')
       .setStyle(ButtonStyle.Secondary)
-      .setDisabled(idx === METIERS.length - 1)
+      .setDisabled(idx === RARETE_ORDRE.length - 1)
   );
 
-  const action = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`metiers_choisir_${idx}`)
-      .setLabel(estActif ? 'Déjà ton métier' : 'Choisir ce métier')
-      .setEmoji('✅')
-      .setStyle(disponible && !estActif ? ButtonStyle.Success : ButtonStyle.Secondary)
-      .setDisabled(!disponible || estActif)
-  );
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`metiers_choix_${idx}`)
+    .setPlaceholder('Choisir un métier de cette page...')
+    .addOptions(
+      metiersDeCetteRarete.map((m) => ({
+        label: m.nom.slice(0, 100),
+        description: `${formatMontant(m.gainBase)}/service`.slice(0, 100),
+        value: m.id,
+        emoji: m.emoji,
+      }))
+    );
 
-  return { embeds: [embed], components: [navigation, action] };
+  return {
+    embeds: [embed],
+    components: [navigation, new ActionRowBuilder().addComponents(menu)],
+  };
 }
 
-async function naviguerMetier(interaction) {
-  const idx = parseInt(interaction.customId.replace('metiers_nav_', ''), 10);
-  const vue = construireVueMetier(interaction.user.id, interaction.guildId, idx);
+async function naviguerRarete(interaction) {
+  const idx = parseInt(interaction.customId.replace('metiers_rarete_', ''), 10);
+  const vue = construireVueRarete(interaction.user.id, interaction.guildId, idx);
   await interaction.update(vue);
 }
 
-async function choisirMetierBouton(interaction) {
-  const idx = parseInt(interaction.customId.replace('metiers_choisir_', ''), 10);
-  const metier = METIERS[idx];
+async function choisirMetierMenu(interaction) {
+  const idx = parseInt(interaction.customId.replace('metiers_choix_', ''), 10);
+  const metierId = interaction.values[0];
+  const metier = METIERS.find((m) => m.id === metierId);
   const userId = interaction.user.id;
   const guildId = interaction.guildId;
 
+  if (!metier) {
+    await interaction.reply({ content: '🚫 Métier introuvable.', ephemeral: true });
+    return;
+  }
+
   if (!estDisponible(userId, guildId, metier)) {
-    await interaction.reply({ content: "🚫 Ce métier n'est pas encore débloqué.", ephemeral: true });
+    await interaction.reply({
+      content: `🚫 **${metier.nom}** n'est pas encore débloqué.\n↳ Condition : ${metier.conditionTexte}`,
+      ephemeral: true,
+    });
     return;
   }
 
   setMetierActuel(userId, guildId, metier.id);
 
-  const vue = construireVueMetier(userId, guildId, idx);
+  const vue = construireVueRarete(userId, guildId, idx);
   await interaction.update(vue);
   await interaction.followUp({
     content: `✅ Tu exerces maintenant le métier de **${metier.nom}** !`,
@@ -95,4 +112,4 @@ async function choisirMetierBouton(interaction) {
   });
 }
 
-module.exports = { construireVueMetier, naviguerMetier, choisirMetierBouton };
+module.exports = { construireVueRarete, naviguerRarete, choisirMetierMenu };

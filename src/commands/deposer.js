@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const { getCompte, updateCash, updateBanque, logTransaction, incrementerQuete } = require('../database');
 const { verifierSucces } = require('../utils/progression');
+const { messageSiEnDette } = require('../utils/dette');
 const { formatMontant } = require('../utils/format');
 
 module.exports = {
@@ -18,6 +19,11 @@ module.exports = {
     const userId = interaction.user.id;
     const guildId = interaction.guildId;
     const compte = getCompte(userId, guildId);
+    const erreurDette = messageSiEnDette(compte);
+    if (erreurDette) {
+      await interaction.reply({ content: erreurDette, ephemeral: true });
+      return;
+    }
     const montant = interaction.options.getInteger('montant') ?? compte.cash;
 
     if (montant <= 0) {

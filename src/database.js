@@ -313,8 +313,9 @@ function getSuccesDebloques(userId, guildId) {
 }
 
 function estSuccesDebloque(userId, guildId, succesId) {
-  return !!db.prepare('SELECT 1 FROM succes_debloques WHERE user_id = ? AND guild_id = ? AND succes_id = ?')
+  const result = db.prepare('SELECT COUNT(*) as c FROM succes_debloques WHERE user_id = ? AND guild_id = ? AND succes_id = ?')
     .get(userId, guildId, succesId);
+  return result && result.c > 0;
 }
 
 function debloquerSucces(userId, guildId, succesId) {

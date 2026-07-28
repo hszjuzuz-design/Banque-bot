@@ -1,5 +1,6 @@
 const { SlashCommandBuilder } = require('discord.js');
 const { getCompte, updateCash, logTransaction } = require('../database');
+const { messageSiEnDette } = require('../utils/dette');
 const { formatMontant } = require('../utils/format');
 
 module.exports = {
@@ -30,6 +31,11 @@ module.exports = {
     }
 
     const compte = getCompte(expediteur.id, guildId);
+    const erreurDette = messageSiEnDette(compte);
+    if (erreurDette) {
+      await interaction.reply({ content: erreurDette, ephemeral: true });
+      return;
+    }
     if (compte.cash < montant) {
       await interaction.reply({
         content: `🚫 Fonds insuffisants. Tu as ${formatMontant(compte.cash)} en poche.`,

@@ -1,6 +1,8 @@
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { getItem, getCompte, updateCash, addInventaire, logTransaction } = require('../database');
+const { getItem, getCompte, updateCash, addInventaire, logTransaction, ajouterHackingXp } = require('../database');
 const { verifierSucces } = require('../utils/progression');
+const { messageSiEnDette } = require('../utils/dette');
+const { XP_FORMATIONS } = require('../vol');
 const { formatMontant } = require('../utils/format');
 
 async function selectionnerArticle(interaction) {
@@ -50,6 +52,12 @@ async function acheterViaBoutique(interaction) {
   const guildId = interaction.guildId;
   const compte = getCompte(userId, guildId);
 
+  const erreurDette = messageSiEnDette(compte);
+  if (erreurDette) {
+    await interaction.reply({ content: erreurDette, ephemeral: true });
+    return;
+  }
+
   if (compte.cash < item.prix) {
     await interaction.reply({
       content: `🚫 Fonds insuffisants. ${item.nom} coûte ${formatMontant(item.prix)}, tu as ${formatMontant(compte.cash)}.`,
@@ -62,8 +70,14 @@ async function acheterViaBoutique(interaction) {
   addInventaire(userId, guildId, itemId, 1);
   logTransaction(userId, null, item.prix, 'achat', guildId);
 
+  let messageXp = '';
+  if (XP_FORMATIONS[itemId]) {
+    ajouterHackingXp(userId, guildId, XP_FORMATIONS[itemId]);
+    messageXp = `\n💻 +${XP_FORMATIONS[itemId]} XP de hacking !`;
+  }
+
   await interaction.reply({
-    content: `✅ Tu as acheté **${item.nom}** pour **${formatMontant(item.prix)}**.`,
+    content: `✅ Tu as acheté **${item.nom}** pour **${formatMontant(item.prix)}**.${messageXp}`,
     ephemeral: true,
   });
 

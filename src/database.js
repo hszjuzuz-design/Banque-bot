@@ -43,7 +43,8 @@ db.exec(`
     nom TEXT NOT NULL,
     prix INTEGER NOT NULL,
     description TEXT,
-    defense INTEGER NOT NULL DEFAULT 0
+    defense INTEGER NOT NULL DEFAULT 0,
+    categorie TEXT NOT NULL DEFAULT 'boutique'
   );
 
   CREATE TABLE IF NOT EXISTS inventaire (
@@ -111,6 +112,27 @@ db.exec(`
     derniere_utilisation INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, guild_id)
   );
+
+  CREATE TABLE IF NOT EXISTS vol_cooldown (
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    derniere_tentative INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS credits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id TEXT NOT NULL,
+    demandeur_id TEXT NOT NULL,
+    montant_initial INTEGER NOT NULL,
+    montant_du INTEGER NOT NULL,
+    jours_demandes INTEGER NOT NULL DEFAULT 7,
+    statut TEXT NOT NULL DEFAULT 'en_attente',
+    raison TEXT,
+    date_demande INTEGER NOT NULL,
+    date_echeance INTEGER,
+    dernier_ajustement TEXT
+  );
 `);
 
 // --- Migrations pour les bases déjà existantes ---
@@ -136,10 +158,16 @@ if (!colonnesComptes.includes('dernier_daily_jour')) {
 if (!colonnesComptes.includes('accidents_subis')) {
   db.exec('ALTER TABLE comptes ADD COLUMN accidents_subis INTEGER NOT NULL DEFAULT 0');
 }
+if (!colonnesComptes.includes('hacking_xp')) {
+  db.exec('ALTER TABLE comptes ADD COLUMN hacking_xp INTEGER NOT NULL DEFAULT 0');
+}
 
 const colonnesBoutique = db.prepare("PRAGMA table_info(boutique)").all().map((c) => c.name);
 if (!colonnesBoutique.includes('defense')) {
   db.exec('ALTER TABLE boutique ADD COLUMN defense INTEGER NOT NULL DEFAULT 0');
+}
+if (!colonnesBoutique.includes('categorie')) {
+  db.exec("ALTER TABLE boutique ADD COLUMN categorie TEXT NOT NULL DEFAULT 'boutique'");
 }
 
 db.prepare("INSERT OR IGNORE INTO owner_tresor (cle, montant) VALUES ('global', 0)").run();
@@ -147,18 +175,25 @@ db.prepare("INSERT OR IGNORE INTO owner_tresor (cle, montant) VALUES ('global', 
 // Catalogue par défaut : INSERT OR IGNORE pour pouvoir ajouter de nouveaux articles
 // à une base déjà existante sans écraser ce que les joueurs possèdent déjà.
 const insertItem = db.prepare(
-  'INSERT OR IGNORE INTO boutique (item_id, nom, prix, description, defense) VALUES (?, ?, ?, ?, ?)'
+  'INSERT OR IGNORE INTO boutique (item_id, nom, prix, description, defense, categorie) VALUES (?, ?, ?, ?, ?, ?)'
 );
 const catalogueDefaut = [
-  ['canne_peche', 'Canne à pêche', 250, "Un outil pour pêcher (décoratif pour l'instant)", 0],
-  ['ordinateur', 'Ordinateur portable', 1200, 'Augmente ton style', 0],
-  ['voiture', 'Voiture', 15000, 'Un véhicule de luxe', 0],
-  ['maison', 'Maison', 50000, 'Un chez-toi bien à toi', 0],
-  ['kit_premiers_secours', 'Kit de premiers secours', 350, 'Réduit légèrement les dégâts subis au travail', 5],
-  ['casque_militaire', 'Casque militaire', 700, 'Protection supplémentaire contre les accidents', 10],
-  ['gilet_pare_balles', 'Gilet pare-balles', 1200, 'Réduit nettement les dégâts subis au travail', 15],
-  ['gilet_blinde_lourd', 'Gilet blindé lourd', 2500, 'Protection maximale contre les accidents', 30],
-  ['montre_collection', 'Montre de collection', 5000, "Pièce d'horlogerie rare, obtenue via la capacité de l'Horloger", 0],
+  ['canne_peche', 'Canne à pêche', 250, "Un outil pour pêcher (décoratif pour l'instant)", 0, 'boutique'],
+  ['ordinateur', 'Ordinateur portable', 1200, 'Augmente ton style', 0, 'boutique'],
+  ['voiture', 'Voiture', 15000, 'Un véhicule de luxe', 0, 'boutique'],
+  ['maison', 'Maison', 50000, 'Un chez-toi bien à toi', 0, 'boutique'],
+  ['kit_premiers_secours', 'Kit de premiers secours', 350, 'Réduit légèrement les dégâts subis au travail', 5, 'boutique'],
+  ['casque_militaire', 'Casque militaire', 700, 'Protection supplémentaire contre les accidents', 10, 'boutique'],
+  ['gilet_pare_balles', 'Gilet pare-balles', 1200, 'Réduit nettement les dégâts subis au travail', 15, 'boutique'],
+  ['gilet_blinde_lourd', 'Gilet blindé lourd', 2500, 'Protection maximale contre les accidents', 30, 'boutique'],
+  ['montre_collection', 'Montre de collection', 5000, "Pièce d'horlogerie rare, obtenue via la capacité de l'Horloger", 0, 'boutique'],
+  ['masque', 'Masque', 400, "Réduit légèrement le risque de te faire attraper lors d'un vol à la poche.", 0, 'supermarche'],
+  ['kit_effraction', "Kit d'effraction", 800, "Augmente légèrement le montant récupéré lors d'un vol à la poche.", 0, 'supermarche'],
+  ['pc_portable_hack', 'PC de piratage', 3000, "Indispensable pour tenter un vol bancaire (/voler banque). Sans lui, impossible de pirater.", 0, 'supermarche'],
+  ['formation_hacking_1', 'Formation piratage — Niveau 1', 500, '+10 XP de hacking.', 0, 'formation'],
+  ['formation_hacking_2', 'Formation piratage — Niveau 2', 1500, '+30 XP de hacking.', 0, 'formation'],
+  ['formation_hacking_3', 'Formation piratage — Niveau 3', 4000, '+75 XP de hacking.', 0, 'formation'],
+  ['formation_hacking_4', 'Formation piratage — Niveau 4 (élite)', 10000, '+200 XP de hacking.', 0, 'formation'],
 ];
 const seedCatalogue = db.transaction((rows) => rows.forEach((r) => insertItem.run(...r)));
 seedCatalogue(catalogueDefaut);
@@ -337,8 +372,8 @@ function getMetiersDebloques(userId, guildId) {
 }
 
 // --- Boutique / inventaire ---
-function getBoutique() {
-  return db.prepare('SELECT * FROM boutique ORDER BY prix ASC').all();
+function getBoutique(categorie = 'boutique') {
+  return db.prepare('SELECT * FROM boutique WHERE categorie = ? ORDER BY prix ASC').all(categorie);
 }
 
 function getItem(itemId) {
@@ -476,6 +511,95 @@ function ajouterReputationSelonMetierActuel(guildId, points) {
   return joueurs.length;
 }
 
+// --- Hacking / vols ---
+function ajouterHackingXp(userId, guildId, points) {
+  getCompte(userId, guildId);
+  db.prepare('UPDATE comptes SET hacking_xp = hacking_xp + ? WHERE user_id = ? AND guild_id = ?')
+    .run(points, userId, guildId);
+}
+
+function getDerniereTentativeVol(userId, guildId) {
+  const row = db.prepare('SELECT derniere_tentative FROM vol_cooldown WHERE user_id = ? AND guild_id = ?')
+    .get(userId, guildId);
+  return row ? row.derniere_tentative : 0;
+}
+
+function setDerniereTentativeVol(userId, guildId, timestamp) {
+  const existant = db.prepare('SELECT 1 FROM vol_cooldown WHERE user_id = ? AND guild_id = ?').get(userId, guildId);
+  if (existant) {
+    db.prepare('UPDATE vol_cooldown SET derniere_tentative = ? WHERE user_id = ? AND guild_id = ?')
+      .run(timestamp, userId, guildId);
+  } else {
+    db.prepare('INSERT INTO vol_cooldown (user_id, guild_id, derniere_tentative) VALUES (?, ?, ?)')
+      .run(userId, guildId, timestamp);
+  }
+}
+
+function possede(userId, guildId, itemId) {
+  const row = db.prepare('SELECT 1 FROM inventaire WHERE user_id = ? AND guild_id = ? AND item_id = ? AND quantite > 0')
+    .get(userId, guildId, itemId);
+  return !!row;
+}
+
+// --- Crédits (prêts) ---
+function creerDemandeCredit(guildId, userId, montant, jours, raison) {
+  const info = db.prepare(
+    'INSERT INTO credits (guild_id, demandeur_id, montant_initial, montant_du, jours_demandes, statut, raison, date_demande) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(guildId, userId, montant, montant, jours, 'en_attente', raison || null, Date.now());
+  return info.lastInsertRowid;
+}
+
+function getCreditsEnAttente(guildId) {
+  return db.prepare("SELECT * FROM credits WHERE guild_id = ? AND statut = 'en_attente' ORDER BY date_demande ASC")
+    .all(guildId);
+}
+
+function getCreditActif(userId, guildId) {
+  return db.prepare("SELECT * FROM credits WHERE guild_id = ? AND demandeur_id = ? AND statut = 'actif'")
+    .get(guildId, userId);
+}
+
+function getCreditParId(id) {
+  return db.prepare('SELECT * FROM credits WHERE id = ?').get(id);
+}
+
+function accepterCredit(id, jours) {
+  const credit = getCreditParId(id);
+  if (!credit) return null;
+  const echeance = Date.now() + jours * 24 * 60 * 60 * 1000;
+  db.prepare("UPDATE credits SET statut = 'actif', date_echeance = ?, dernier_ajustement = ? WHERE id = ?")
+    .run(echeance, getJourCourant(), id);
+  updateCash(credit.demandeur_id, credit.guild_id, credit.montant_initial);
+  return credit;
+}
+
+function refuserCredit(id) {
+  db.prepare("UPDATE credits SET statut = 'refuse' WHERE id = ?").run(id);
+}
+
+function rembourserCredit(id, montant) {
+  const credit = getCreditParId(id);
+  if (!credit) return null;
+  const nouveauMontant = Math.max(0, credit.montant_du - montant);
+  const statut = nouveauMontant === 0 ? 'rembourse' : 'actif';
+  db.prepare('UPDATE credits SET montant_du = ?, statut = ? WHERE id = ?').run(nouveauMontant, statut, id);
+  return { ...credit, montant_du: nouveauMontant, statut };
+}
+
+function appliquerPenalitesRetard() {
+  const aujourdhui = getJourCourant();
+  const enRetard = db.prepare(
+    "SELECT * FROM credits WHERE statut = 'actif' AND date_echeance < ? AND (dernier_ajustement IS NULL OR dernier_ajustement != ?)"
+  ).all(Date.now(), aujourdhui);
+
+  for (const credit of enRetard) {
+    const penalite = Math.max(1, Math.ceil(credit.montant_initial * 0.05));
+    db.prepare('UPDATE credits SET montant_du = montant_du + ?, dernier_ajustement = ? WHERE id = ?')
+      .run(penalite, aujourdhui, credit.id);
+  }
+  return enRetard.length;
+}
+
 module.exports = {
   db,
   getCompte,
@@ -525,4 +649,16 @@ module.exports = {
   setDerniereCapacite,
   crediterTousLesJoueurs,
   ajouterReputationSelonMetierActuel,
+  ajouterHackingXp,
+  getDerniereTentativeVol,
+  setDerniereTentativeVol,
+  possede,
+  creerDemandeCredit,
+  getCreditsEnAttente,
+  getCreditActif,
+  getCreditParId,
+  accepterCredit,
+  refuserCredit,
+  rembourserCredit,
+  appliquerPenalitesRetard,
 };

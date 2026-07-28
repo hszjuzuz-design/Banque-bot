@@ -2,7 +2,18 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { Client, GatewayIntentBits, Collection, Partials, REST, Routes } = require('discord.js');
-const { ouvrirModal: ouvrirModalCreateur, traiterModal: traiterModalCreateur } = require('./handlers/createurHandler');
+const {
+  ouvrirModal: ouvrirModalCreateur,
+  traiterModal: traiterModalCreateur,
+  afficherTresor,
+  ouvrirModalTresor,
+  traiterModalTresor,
+} = require('./handlers/createurHandler');
+const {
+  afficherDemandesCredit,
+  selectionnerDemandeCredit,
+  traiterDecisionCredit,
+} = require('./handlers/creditAdminHandler');
 const {
   selectionnerServeur,
   retourMenuServeurs,
@@ -16,6 +27,7 @@ const { selectionnerArticle, acheterViaBoutique } = require('./handlers/boutique
 const { naviguerRarete, choisirMetierMenu } = require('./handlers/metiersHandler');
 const { surveillerAjoutRoleCreateur } = require('./handlers/roleCreateurHandler');
 const { estProprietaire } = require('./utils/permissions');
+const { appliquerPenalitesRetard } = require('./database');
 
 const client = new Client({
   intents: [
@@ -62,6 +74,16 @@ client.once('ready', async () => {
   console.log(`✅ Connecté en tant que ${client.user.tag}`);
   console.log(`🏦 Banque prête sur ${client.guilds.cache.size} serveur(s).`);
   await deployerCommandes();
+
+  // Vérifie une fois par heure si des crédits sont en retard et augmente leur montant dû.
+  setInterval(() => {
+    try {
+      const nb = appliquerPenalitesRetard();
+      if (nb > 0) console.log(`💳 Pénalité de retard appliquée sur ${nb} crédit(s).`);
+    } catch (error) {
+      console.error('Erreur lors du calcul des pénalités de crédit :', error);
+    }
+  }, 60 * 60 * 1000);
 });
 
 // --- Nouveau serveur : invitation + demande d'identification des créateurs en MP ---
@@ -138,6 +160,26 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      if (id === 'createur_tresor') {
+        await afficherTresor(interaction);
+        return;
+      }
+
+      if (id === 'createur_tresor_retirer') {
+        await ouvrirModalTresor(interaction);
+        return;
+      }
+
+      if (id === 'createur_credits') {
+        await afficherDemandesCredit(interaction);
+        return;
+      }
+
+      if (id.startsWith('createur_credit_accepter_') || id.startsWith('createur_credit_refuser_')) {
+        await traiterDecisionCredit(interaction);
+        return;
+      }
+
       if (id.startsWith('quete_reclamer_')) {
         await reclamerQuete(interaction);
         return;
@@ -180,12 +222,21 @@ client.on('interactionCreate', async (interaction) => {
         await choisirMetierMenu(interaction);
         return;
       }
+      if (interaction.customId === 'createur_credit_select') {
+        await selectionnerDemandeCredit(interaction);
+        return;
+      }
       return;
     }
 
     // --- Modals ---
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
+
+      if (id === 'createur_tresor_retirer_modal') {
+        await traiterModalTresor(interaction);
+        return;
+      }
 
       if (id.startsWith('createur_') && id.endsWith('_modal')) {
         await traiterModalCreateur(interaction);

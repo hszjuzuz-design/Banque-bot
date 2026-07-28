@@ -1,6 +1,6 @@
 const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { aRoleCreateur, limitesCreateur, nomRoleCreateur } = require('../utils/permissions');
-const { getQuotaUtilise } = require('../database');
+const { getQuotaUtilise, getTresor, getCreditsEnAttente } = require('../database');
 const { formatMontant } = require('../utils/format');
 
 module.exports = {
@@ -23,20 +23,25 @@ module.exports = {
     const limites = limitesCreateur();
     const utilise = getQuotaUtilise(interaction.user.id, interaction.guildId);
     const restant = Math.max(0, limites.quotidienne - utilise);
+    const tresor = getTresor(interaction.guildId);
+    const demandesEnAttente = getCreditsEnAttente(interaction.guildId).length;
 
     const embed = new EmbedBuilder()
       .setColor(0x3498db)
       .setTitle('🏛️ Panel Créateur')
       .setDescription(
         `Limite par action : **${formatMontant(limites.parAction)}**\n` +
-        `Quota quotidien restant : **${formatMontant(restant)}** / ${formatMontant(limites.quotidienne)}\n\n` +
-        `Ce panel te permet de donner ou retirer du **cash** (pas la banque) à un membre de ce serveur.`
+        `Quota quotidien restant : **${formatMontant(restant)}** / ${formatMontant(limites.quotidienne)}\n` +
+        `Trésor du serveur : **${formatMontant(tresor)}**\n` +
+        `Demandes de crédit en attente : **${demandesEnAttente}**`
       );
 
     const boutons = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId('createur_give').setLabel('Donner de l\'argent').setStyle(ButtonStyle.Success).setEmoji('💸'),
-      new ButtonBuilder().setCustomId('createur_take').setLabel('Retirer de l\'argent').setStyle(ButtonStyle.Danger).setEmoji('➖'),
-      new ButtonBuilder().setCustomId('createur_view').setLabel('Voir un solde').setStyle(ButtonStyle.Secondary).setEmoji('🔍')
+      new ButtonBuilder().setCustomId('createur_give').setLabel('Donner').setStyle(ButtonStyle.Success).setEmoji('💸'),
+      new ButtonBuilder().setCustomId('createur_take').setLabel('Retirer').setStyle(ButtonStyle.Danger).setEmoji('➖'),
+      new ButtonBuilder().setCustomId('createur_view').setLabel('Voir un solde').setStyle(ButtonStyle.Secondary).setEmoji('🔍'),
+      new ButtonBuilder().setCustomId('createur_tresor').setLabel('Trésor').setStyle(ButtonStyle.Primary).setEmoji('🏛️'),
+      new ButtonBuilder().setCustomId('createur_credits').setLabel('Demandes de crédit').setStyle(ButtonStyle.Primary).setEmoji('📋')
     );
 
     await interaction.reply({ embeds: [embed], components: [boutons], ephemeral: true });
